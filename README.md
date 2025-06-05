@@ -40,7 +40,7 @@ Disclaimer: This demo, including all the files that appear (e.g: CV_candidates.z
 
 Make sure you have chrome driver, docker and python3.10 installed.
 
-We highly advice you use exactly python3.10 for the setup. Dependencies error might happen otherwise.
+Python 3.10.x is required. Please ensure you are using a version within the 3.10 series (e.g., 3.10.0, 3.10.11, etc.). Dependencies error might happen otherwise.
 
 For issues related to chrome driver, see the **Chromedriver** section.
 
@@ -156,6 +156,7 @@ save_session = True # whenever to remember the current session
 speak = True # text to speech
 listen = False # Speech to text, only for CLI
 work_dir =  /Users/mlg/Documents/workspace # The workspace for AgenticSeek.
+# Note for Windows Users: Ensure the work_dir path uses backslashes (e.g., C:\Users\YourName\Documents\workspace_for_agenticseek) or forward slashes.
 jarvis_personality = False # Whenever to use a more "Jarvis" like personality (experimental)
 languages = en zh # The list of languages, Text to speech will default to the first language on the list
 [BROWSER]

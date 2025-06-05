@@ -45,7 +45,30 @@ celery_app.conf.update(task_track_started=True)
 logger = StructuredLogger(service_name="AgenticSeekAPI")
 error_handler = ErrorHandler(max_retries=3, delay_factor=1.0) # Default values, can be configured
 config = configparser.ConfigParser()
-config.read('config.ini')
+config_path = 'config.ini'
+if not os.path.exists(config_path):
+    # This print goes to stderr, which is good for critical startup errors.
+    # Logger might not be initialized yet, or its output might be redirected.
+    print(f"CRITICAL: Configuration file '{config_path}' not found. Application cannot start.", file=sys.stderr)
+    sys.exit(1)
+
+config.read(config_path)
+
+if not config.sections():
+    print(f"CRITICAL: Configuration file '{config_path}' is empty or invalid. Application cannot start.", file=sys.stderr)
+    sys.exit(1)
+
+# Example of checking for an essential section, can be expanded
+if not config.has_section("MAIN"):
+    # Assuming logger is available after config.read() and basic checks
+    # If not, use print to stderr as above.
+    # For this example, let's assume logger is initialized right after config.
+    # However, logger itself is defined after config, so this specific log might not work.
+    # The print statement is more reliable for very early critical errors.
+    print("CRITICAL: Config.ini is missing [MAIN] section. Application cannot start.", file=sys.stderr)
+    # logger.critical("Config.ini is missing [MAIN] section. Application cannot start.") # This line might be problematic depending on logger init order
+    sys.exit(1)
+
 
 # Global instances for MessageQueue and LLMService
 # These will be initialized in the startup event
@@ -176,27 +199,34 @@ async def startup_event():
     redis_url = config.get('REDIS', 'url', fallback="redis://localhost:6379/0")
     message_queue = MessageQueue(redis_url=redis_url, service_name="APIMessageQueue")
     logger.info(event="MessageQueue initialized on startup.", context={"redis_url": redis_url})
+    if not message_queue.redis: # Basic check if redis connection object exists
+        logger.critical("MessageQueue Redis client failed to initialize. Application cannot start.")
+        sys.exit(1)
+    # A more robust check might involve a ping to Redis here, but MessageQueue constructor logs errors.
 
-    if not global_provider:
-        logger.error(event="LLM Provider not available globally after initialize_system. LLMService may not function.")
-        # Optionally, try to initialize a default provider here if critical
-        # For now, we rely on initialize_system to set it up.
-
-    task_channel_name = config.get('LLM_SERVICE', 'task_channel', fallback="llm_tasks")
+    # LLMService Initialization and Check
+    llm_task_channel = config.get('LLM_SERVICE', 'task_channel', fallback="llm_tasks")
     if global_provider:
         llm_service = LLMService(
             provider=global_provider,
             message_queue=message_queue,
-            task_channel_name=task_channel_name
+            task_channel_name=llm_task_channel
         )
-        logger.info(event="LLMService initialized.", context={"task_channel": task_channel_name})
-        asyncio.create_task(llm_service.start()) # Start LLMService itself
+        logger.info(event="LLMService instance created.", context={"task_channel": llm_task_channel})
+        asyncio.create_task(llm_service.start())
         logger.info(event="LLMService startup task created.")
     else:
-        logger.error(event="LLMService could not be initialized: LLM Provider is not available.")
+        logger.error(event="LLMService could not be initialized: Global LLM Provider is not available. Critical for LLM tasks.")
+        # Decide if this is fatal. If agents rely heavily on LLMService, it might be.
+        # For now, we log an error and continue, assuming some parts of app might work or it's for specific agents.
+        # If it's critical for all operations: sys.exit(1)
 
-    # Initialize BrowserControlService
-    global browser_service # Declare we are using the global variable
+    if llm_service is None and global_provider : # Check if instance creation failed despite provider being available (e.g. MQ issue in constructor)
+        logger.critical("LLMService instance is None after attempted initialization. Application cannot reliably start.")
+        sys.exit(1) # Exit if LLMService is critical and failed to instantiate
+
+    # BrowserControlService Initialization and Check
+    global browser_service
     browser_task_channel = config.get('MESSAGE_QUEUE', 'browser_tasks_channel', fallback="browser_tasks")
     if global_browser and message_queue:
         browser_service = BrowserControlService(
@@ -204,11 +234,17 @@ async def startup_event():
             message_queue=message_queue,
             task_channel_name=browser_task_channel
         )
-        logger.info(event="BrowserControlService initialized.", context={"task_channel": browser_task_channel})
-        asyncio.create_task(browser_service.start()) # Start BrowserControlService
+        logger.info(event="BrowserControlService instance created.", context={"task_channel": browser_task_channel})
+        asyncio.create_task(browser_service.start())
         logger.info(event="BrowserControlService startup task created.")
     else:
-        logger.error("Failed to start BrowserControlService: global_browser or message_queue not initialized.")
+        logger.error("BrowserControlService could not be initialized: global_browser or message_queue not available. Critical for browser tasks.")
+        # Similar to LLMService, decide if this is fatal.
+        # If it's critical for all operations: sys.exit(1)
+
+    if browser_service is None and global_browser and message_queue: # Check if instance creation failed
+        logger.critical("BrowserControlService instance is None after attempted initialization. Application cannot reliably start.")
+        sys.exit(1) # Exit if BrowserService is critical and failed to instantiate
 
     # Assign message_queue to existing agents and start their reply subscriptions
     if interaction and hasattr(interaction, 'agents') and message_queue:
